@@ -1,0 +1,6 @@
+{
+  "name": "TitlePlz - Cinematic Movie Reconnaissance Terminal",
+  "description": "Crowd-sourced cinema identification terminal. Decode obscure film frames, audio stems, and quotes with real-time community consensus and recon telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
