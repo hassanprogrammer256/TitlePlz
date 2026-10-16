@@ -1,1 +1,11 @@
 .env
+node_modules/
+dist/
+uploads/
+*.db
+*.db-journal
+src/generated/
+test-uploads/
+*.db-wal
+*.db-shm
+e2e.db*

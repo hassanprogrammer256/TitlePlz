@@ -1,0 +1,285 @@
+// TitlePlz data model.
+//
+// PORTABLE SCHEMA (works on SQLite and PostgreSQL). Rules:
+//   - no enums (role/status/etc are Strings validated in code)
+//   - no scalar lists (tags use Tag + DropTag)
+//   - no Json columns
+//   - credits are Int
+//   - no provider-specific native types (@db.*)
+//
+// The `provider` line below is managed by `npm run db:sync` / `db:use`
+// (derived from DATABASE_URL). Do not hand-edit it.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id                String    @id @default(cuid())
+  username          String
+  usernameKey       String    @unique // lowercase, for case-insensitive uniqueness
+  handle            String    @unique // "@Name"
+  passwordHash      String
+  role              String    @default("seeker") // seeker | detective | curator
+  isAdmin           Boolean   @default(false)
+  avatarUrl         String?
+  agentHash         String    @unique // e.g. "NV-8841-A"
+  credits           Int       @default(0) // cached sum of CreditLedger
+  points            Int       @default(0) // lifetime MovieKing points
+  lastDailyRefillAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  drops         Drop[]           @relation("DropUploader")
+  solvedDrops   Drop[]           @relation("DropSolver")
+  trials        Trial[]
+  votes         CandidateVote[]
+  comments      Comment[]
+  commentAgrees CommentAgree[]
+  ledger        CreditLedger[]
+  following     Follow[]         @relation("Follower")
+  followers     Follow[]         @relation("Following")
+  standings     SeasonStanding[]
+  activities    Activity[]
+  uploads       Upload[]
+}
+
+model Follow {
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
+}
+
+model Drop {
+  id                  String    @id @default(cuid())
+  dropNumber          String    @unique // "DROP #9042-ALPHA"
+  uploaderId          String
+  mediaType           String // photo | clip
+  clipDurationSeconds Int?
+  imageUrl            String
+  imageKey            String? // storage key (null for external/seed URLs)
+  videoUrl            String?
+  videoKey            String?
+  releaseYear         Int
+  correctTitle        String // never serialized to non-owners until solved/expired
+  correctTitleKey     String // normalized form used for matching
+  bounty              Int
+  validityHours       Int
+  expiresAt           DateTime
+  status              String    @default("unsolved") // unsolved | tense_consensus | high_consensus | solved | expired
+  solvedById          String?
+  solvedAt            DateTime?
+  rewardClaimed       Boolean   @default(false)
+  refundedAt          DateTime? // set when an expired drop's bounty is refunded
+  timecode            String    @default("00:00:00:00")
+  source              String    @default("User Upload")
+  aspectRatioLabel    String    @default("")
+  spectralLabel       String    @default("")
+  fpsLabel            String    @default("")
+  audioStemLabel      String    @default("")
+  audioDuration       Int       @default(0)
+  targetPropNote      String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  uploader   User        @relation("DropUploader", fields: [uploaderId], references: [id])
+  solvedBy   User?       @relation("DropSolver", fields: [solvedById], references: [id])
+  tags       DropTag[]
+  candidates Candidate[]
+  trials     Trial[]
+  comments   Comment[]
+  activities Activity[]
+
+  @@index([status, expiresAt])
+  @@index([uploaderId])
+  @@index([createdAt])
+}
+
+model Tag {
+  id    String    @id @default(cuid())
+  name  String    @unique // stored lowercase without '#'
+  drops DropTag[]
+}
+
+model DropTag {
+  dropId String
+  tagId  String
+
+  drop Drop @relation(fields: [dropId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([dropId, tagId])
+  @@index([tagId])
+}
+
+model Candidate {
+  id              String   @id @default(cuid())
+  dropId          String
+  title           String
+  normalizedTitle String
+  year            Int?
+  director        String?
+  cinematographer String?
+  imdbId          String?
+  notes           String?
+  votes           Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  drop   Drop            @relation(fields: [dropId], references: [id], onDelete: Cascade)
+  voters CandidateVote[]
+
+  @@unique([dropId, normalizedTitle])
+  @@index([dropId])
+}
+
+model CandidateVote {
+  id          String   @id @default(cuid())
+  candidateId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, userId])
+  @@index([userId])
+}
+
+model Trial {
+  id           String   @id @default(cuid())
+  dropId       String
+  userId       String
+  guessedTitle String
+  isCorrect    Boolean
+  stake        Int
+  reward       Int      @default(0) // stake refund + bounty when correct
+  pointsDelta  Int
+  createdAt    DateTime @default(now())
+
+  drop Drop @relation(fields: [dropId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([dropId, userId]) // one trial per user per drop
+  @@index([userId, createdAt])
+}
+
+model Comment {
+  id             String   @id @default(cuid())
+  dropId         String
+  authorId       String
+  timestampLabel String   @default("00:00")
+  content        String
+  createdAt      DateTime @default(now())
+
+  drop   Drop           @relation(fields: [dropId], references: [id], onDelete: Cascade)
+  author User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  agrees CommentAgree[]
+
+  @@index([dropId, createdAt])
+}
+
+model CommentAgree {
+  commentId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([commentId, userId])
+  @@index([userId])
+}
+
+// Immutable. User.credits must always equal SUM(delta) for that user.
+model CreditLedger {
+  id             String   @id @default(cuid())
+  userId         String
+  delta          Int
+  balanceAfter   Int
+  reason         String // signup | daily_refill | purchase | stake | bounty_stake | reward | refund
+  refType        String?
+  refId          String?
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model Season {
+  id           String    @id @default(cuid())
+  seasonNumber Int       @unique
+  name         String
+  startedAt    DateTime
+  endsAt       DateTime
+  isActive     Boolean   @default(false)
+  closedAt     DateTime?
+
+  standings SeasonStanding[]
+
+  @@index([isActive])
+}
+
+model SeasonStanding {
+  seasonId     String
+  userId       String
+  points       Int    @default(0)
+  solvedCount  Int    @default(0)
+  bountyEarned Int    @default(0)
+  tier         String @default("safe") // promoted | safe | demoted (set when the season closes)
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([seasonId, userId])
+  @@index([seasonId, points])
+}
+
+// Backs the scouts feed: what a user did (posted/answered/rewarded a drop).
+model Activity {
+  id          String   @id @default(cuid())
+  actorId     String
+  type        String // posted_clip | answered_clip | rewarded_clip
+  dropId      String
+  message     String
+  amount      Int?
+  pointsDelta Int?
+  createdAt   DateTime @default(now())
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  drop  Drop @relation(fields: [dropId], references: [id], onDelete: Cascade)
+
+  @@index([actorId, createdAt])
+  @@index([dropId])
+}
+
+// Media files stored via the StorageAdapter. A drop may only reference uploads
+// that its own uploader created and that no other drop has claimed (dropId null).
+model Upload {
+  id              String   @id @default(cuid())
+  key             String   @unique // storage key, e.g. u/<userId>/<random>.png
+  userId          String
+  kind            String // image | video
+  contentType     String
+  sizeBytes       Int
+  durationSeconds Int? // videos only, read from the MP4 header
+  dropId          String? // set once attached to a drop
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([dropId])
+}

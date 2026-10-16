@@ -15,6 +15,7 @@ import {
   Locate,
 } from 'lucide-react';
 
+import { canAdministerSeason } from '../config';
 interface MovieKingLeaderboardProps {
   leaders: MovieKingLeader[];
   season: SeasonInfo | null;
@@ -35,6 +36,17 @@ export const MovieKingLeaderboard: React.FC<MovieKingLeaderboardProps> = ({
   onAdminResetSeason,
 }) => {
   const [seasonTimer, setSeasonTimer] = useState<string>('');
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const handleAdminReset = async () => {
+    if (!onAdminResetSeason) return;
+    try {
+      setResetError(null);
+      await onAdminResetSeason();
+    } catch (err: any) {
+      setResetError(err?.message || 'Could not start a new season.');
+    }
+  };
   const scrollRef = useRef<HTMLDivElement>(null);
   const myRowRef = useRef<HTMLDivElement>(null);
 
@@ -209,7 +221,7 @@ export const MovieKingLeaderboard: React.FC<MovieKingLeaderboardProps> = ({
                 {!isCurrentUser && (
                   <button
                     onClick={() =>
-                      isScouted ? onUnfollowUser(leader.handle) : onFollowUser(leader.handle)
+                      (isScouted ? onUnfollowUser(leader.handle) : onFollowUser(leader.handle)).catch(() => {})
                     }
                     className={`p-1 rounded text-[10px] font-mono border transition-colors ${
                       isScouted
@@ -257,11 +269,11 @@ export const MovieKingLeaderboard: React.FC<MovieKingLeaderboardProps> = ({
       </div>
 
       {/* Admin season reset action if role is curator */}
-      {currentUser?.role === 'curator' && onAdminResetSeason && (
+      {canAdministerSeason(currentUser) && onAdminResetSeason && (
         <div className="mt-3 pt-3 border-t border-zinc-800 flex items-center justify-between">
           <span className="text-[10px] text-zinc-500 font-mono">Curator / Admin Controls:</span>
           <button
-            onClick={onAdminResetSeason}
+            onClick={handleAdminReset}
             className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] flex items-center gap-1 font-mono transition-colors"
           >
             <RefreshCw className="w-3 h-3" />
@@ -269,6 +281,7 @@ export const MovieKingLeaderboard: React.FC<MovieKingLeaderboardProps> = ({
           </button>
         </div>
       )}
+      {resetError && <div role="alert" className="mt-2 text-[10px] text-red-400">{resetError}</div>}
     </div>
   );
 };

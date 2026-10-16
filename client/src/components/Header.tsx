@@ -12,6 +12,7 @@ import {
   Menu,
 } from 'lucide-react';
 
+import { CAN_SWITCH_USERS, USE_MOCKS } from '../config';
 interface HeaderProps {
   user: User;
   onOpenDropModal: () => void;
@@ -100,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-zinc-700">•</span>
               <span className="flex items-center gap-1 text-amber-400" title="Central Archive">
                 <Database className="w-2.5 h-2.5" />
-                <span>Archive {systemStatus?.mongodb?.status === 'connected' ? 'Live' : 'Synced'}</span>
+                <span>Archive {systemStatus?.database?.status === 'connected' ? 'Live' : 'Synced'}</span>
               </span>
             </div>
           </div>
@@ -201,11 +202,13 @@ export const Header: React.FC<HeaderProps> = ({
 
             {userMenuOpen && (
               <div className="absolute right-0 mt-1 w-52 rounded bg-zinc-900 border border-zinc-700 shadow-xl py-1 z-50 font-mono text-[11px]">
-                <div className="px-2 py-1 text-[10px] text-zinc-500 border-b border-zinc-800 flex items-center justify-between">
-                  <span>Recon Agent Roster</span>
-                  <span className="text-cyan-400">Quick Switch</span>
-                </div>
-                {allUsers.map(u => (
+                {CAN_SWITCH_USERS && (
+                  <div className="px-2 py-1 text-[10px] text-zinc-500 border-b border-zinc-800 flex items-center justify-between">
+                    <span>Recon Agent Roster</span>
+                    <span className="text-cyan-400">Quick Switch</span>
+                  </div>
+                )}
+                {(CAN_SWITCH_USERS ? allUsers : []).map(u => (
                   <button
                     key={u.id}
                     onClick={() => {
@@ -219,7 +222,7 @@ export const Header: React.FC<HeaderProps> = ({
                     <img src={u.avatar} alt={u.handle} className="w-5 h-5 rounded-full object-cover" />
                     <div className="flex-1 truncate">
                       <div className="truncate">{u.handle}</div>
-                      <div className="text-[9px] text-zinc-500">${u.credits} • {u.points} pts</div>
+                      <div className="text-[9px] text-zinc-500">{USE_MOCKS || u.id === user.id ? `$${u.credits} • ` : ''}{u.points} pts</div>
                     </div>
                     {u.id === user.id && <span className="text-cyan-400">✓</span>}
                   </button>

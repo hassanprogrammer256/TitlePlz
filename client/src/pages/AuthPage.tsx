@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserRole } from '../types';
 import { ShieldCheck, Key, AlertCircle, Coins, Radio, Terminal } from 'lucide-react';
 import { dummyUsers } from '../data/dummyData';
+import { USE_MOCKS } from '../config';
 
 interface AuthPageProps {
   onLogin: (username: string, password?: string) => Promise<any>;
@@ -126,7 +127,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onRegister }) => {
                   className="w-full px-3 py-2 rounded bg-black/60 border border-zinc-800 text-cyan-200 focus:outline-none focus:border-cyan-500 text-xs"
                 >
                   <option value="detective">Verified Detective (Full Access)</option>
-                  <option value="curator">Archival Curator (Admin)</option>
+                  {USE_MOCKS && <option value="curator">Archival Curator (Admin)</option>}
                   <option value="seeker">Viewer / Spotter (Casual)</option>
                 </select>
                 <span className="text-[10px] text-zinc-500 block mt-1">
@@ -174,7 +175,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onRegister }) => {
           </div>
         </div>
 
-        {!isRegister && (
+        {USE_MOCKS && !isRegister && (
           <div className="mt-4 bg-[#0e131b]/70 border border-zinc-800 rounded-lg p-3 text-[10px] text-zinc-500">
             <div className="flex items-center gap-1.5 text-zinc-400 font-bold mb-1.5">
               <Terminal className="w-3 h-3" />

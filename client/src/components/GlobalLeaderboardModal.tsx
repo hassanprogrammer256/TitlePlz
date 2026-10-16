@@ -17,6 +17,7 @@ import {
   Locate,
 } from 'lucide-react';
 
+import { canAdministerSeason } from '../config';
 interface GlobalLeaderboardModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -39,6 +40,7 @@ export const GlobalLeaderboardModal: React.FC<GlobalLeaderboardModalProps> = ({
   onAdminResetSeason,
 }) => {
   const [seasonTimer, setSeasonTimer] = useState<string>('');
+  const [resetError, setResetError] = useState<string | null>(null);
   const [filterTier, setFilterTier] = useState<'all' | 'promoted' | 'safe' | 'demoted'>('all');
   const [isResetting, setIsResetting] = useState(false);
   const [query, setQuery] = useState('');
@@ -92,10 +94,11 @@ export const GlobalLeaderboardModal: React.FC<GlobalLeaderboardModalProps> = ({
   const handleAdminReset = async () => {
     if (!onAdminResetSeason) return;
     try {
+      setResetError(null);
       setIsResetting(true);
       await onAdminResetSeason();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setResetError(err?.message || 'Could not start a new season.');
     } finally {
       setIsResetting(false);
     }
@@ -290,7 +293,7 @@ export const GlobalLeaderboardModal: React.FC<GlobalLeaderboardModalProps> = ({
                   {!isCurrentUser && (
                     <button
                       onClick={() =>
-                        isScouted ? onUnfollowUser(leader.handle) : onFollowUser(leader.handle)
+                        (isScouted ? onUnfollowUser(leader.handle) : onFollowUser(leader.handle)).catch(() => {})
                       }
                       className={`px-2.5 py-1 rounded text-xs font-mono border flex items-center gap-1 transition-colors ${
                         isScouted
@@ -309,7 +312,7 @@ export const GlobalLeaderboardModal: React.FC<GlobalLeaderboardModalProps> = ({
         </div>
 
         {/* Curator Admin Reset */}
-        {currentUser?.role === 'curator' && onAdminResetSeason && (
+        {canAdministerSeason(currentUser) && onAdminResetSeason && (
           <div className="mt-3 pt-3 border-t border-zinc-800 flex items-center justify-between">
             <span className="text-[10px] text-zinc-400">
               Curator Command: Manually resolve 31-day season and rotate tiers.
@@ -324,6 +327,7 @@ export const GlobalLeaderboardModal: React.FC<GlobalLeaderboardModalProps> = ({
             </button>
           </div>
         )}
+        {resetError && <div role="alert" className="mt-2 text-[10px] text-red-400 text-right">{resetError}</div>}
       </div>
     </div>
   );

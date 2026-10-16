@@ -24,6 +24,7 @@ import { ScoutingHubModal } from '../components/ScoutingHubModal';
 import { GlobalLeaderboardModal } from '../components/GlobalLeaderboardModal';
 import { Bell } from 'lucide-react';
 
+import { canAdministerSeason } from '../config';
 interface DashboardProps {
   currentUser: User;
   allUsers: User[];
@@ -179,7 +180,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 onOpenGlobalModal={() => setIsGlobalLeaderboardOpen(true)}
                 onFollowUser={onFollowUser}
                 onUnfollowUser={onUnfollowUser}
-                onAdminResetSeason={currentUser.role === 'curator' ? onAdminResetSeason : undefined}
+                onAdminResetSeason={canAdministerSeason(currentUser) ? onAdminResetSeason : undefined}
               />
             </div>
           ) : activeTab === 'radar' ? (
@@ -203,7 +204,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 onOpenGlobalModal={() => setIsGlobalLeaderboardOpen(true)}
                 onFollowUser={onFollowUser}
                 onUnfollowUser={onUnfollowUser}
-                onAdminResetSeason={currentUser.role === 'curator' ? onAdminResetSeason : undefined}
+                onAdminResetSeason={canAdministerSeason(currentUser) ? onAdminResetSeason : undefined}
               />
             </div>
           ) : (
@@ -255,7 +256,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   onOpenGlobalModal={() => setIsGlobalLeaderboardOpen(true)}
                   onFollowUser={onFollowUser}
                   onUnfollowUser={onUnfollowUser}
-                  onAdminResetSeason={currentUser.role === 'curator' ? onAdminResetSeason : undefined}
+                  onAdminResetSeason={canAdministerSeason(currentUser) ? onAdminResetSeason : undefined}
                 />
               </div>
             </div>
@@ -303,7 +304,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         currentUser={currentUser}
         onFollowUser={onFollowUser}
         onUnfollowUser={onUnfollowUser}
-        onAdminResetSeason={currentUser.role === 'curator' ? onAdminResetSeason : undefined}
+        onAdminResetSeason={canAdministerSeason(currentUser) ? onAdminResetSeason : undefined}
       />
     </div>
   );

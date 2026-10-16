@@ -57,10 +57,14 @@ export const MysteryDropInspector: React.FC<MysteryDropInspectorProps> = ({
       onOpenAuth();
       return;
     }
-    if (isUploaderScouted) {
-      await onUnfollowUser(drop.uploaderHandle);
-    } else {
-      await onFollowUser(drop.uploaderHandle);
+    try {
+      if (isUploaderScouted) {
+        await onUnfollowUser(drop.uploaderHandle);
+      } else {
+        await onFollowUser(drop.uploaderHandle);
+      }
+    } catch {
+      // the app already showed the reason as a toast
     }
   };
 

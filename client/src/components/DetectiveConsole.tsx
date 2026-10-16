@@ -81,7 +81,7 @@ export const DetectiveConsole: React.FC<DetectiveConsoleProps> = ({
           <span className="text-zinc-400 font-medium">Datastore:</span>
           <span className="text-amber-300 flex items-center gap-1">
             <Database className="w-3 h-3" />
-            Central Archive ({systemStatus?.mongodb?.status === 'connected' ? 'Archive Connected' : 'Records Synced'})
+            Central Archive ({systemStatus?.database?.status === 'connected' ? 'Archive Connected' : 'Records Synced'})
           </span>
         </div>
       </div>

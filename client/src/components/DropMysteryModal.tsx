@@ -130,6 +130,9 @@ export const DropMysteryModal: React.FC<DropMysteryModalProps> = ({
         tags,
         imageUrl: displayImageUrl,
         videoUrl: mediaType === 'clip' ? specimenPreviewUrl! : undefined,
+        // For the real backend: the file itself plus (for clips) the extracted poster frame as a data URL.
+        specimenFile,
+        posterDataUrl: displayImageUrl.startsWith('data:') ? displayImageUrl : undefined,
       });
 
       onClose();

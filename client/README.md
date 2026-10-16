@@ -10,11 +10,18 @@ View your app in AI Studio: https://ai.studio/apps/6e416285-6b6a-446a-a6aa-d2dc1
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js 22+ (developed on Node 24).
 
+The app talks to the backend in `../server` (Express + Prisma, SQLite in development).
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Start the backend (in `server/`):
+   - `npm install`, copy `.env.example` to `.env` and set `JWT_SECRET` (32+ characters)
+   - `npx prisma migrate deploy` then `npm run db:seed` (demo accounts are listed at the top of `prisma/seed.ts`)
+   - `npm run dev` (listens on http://localhost:4000)
+2. Start the client (in `client/`):
+   - `npm install`
+   - `npm run dev` (Vite proxies `/api`, `/media` and `/socket.io` to the backend; override the target with `VITE_API_TARGET`)
+
+**No backend?** Set `VITE_USE_MOCKS=true` (for example in `.env.local`) to run the whole UI on built-in demo data, with no server calls.
+
+The Gemini key is **server-side only** and is not used by the client. See `../server/docs/project_progress.md` for the backend roadmap.

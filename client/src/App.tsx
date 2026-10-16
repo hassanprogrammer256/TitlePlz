@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { io } from 'socket.io-client';
+import { io, type Socket } from 'socket.io-client';
 import {
   User,
   MysteryDrop,
@@ -23,17 +23,47 @@ import {
   dummySystemStatus,
 } from './data/dummyData';
 import * as mockApi from './data/mockApi';
+import { USE_MOCKS } from './config';
 
-// No backend exists yet — every fetch/socket/SSE call below falls back to
-// client-side simulated data & logic (see data/dummyData.ts + data/mockApi.ts)
-// so the whole app can be explored end to end ahead of a real server.
-const OFFLINE_MODE = true;
+// With VITE_USE_MOCKS=true the app runs on client-side simulated data and logic (see
+// data/dummyData.ts + data/mockApi.ts) and never calls the server. By default it talks to the
+// real /api backend, and failures surface as errors instead of falling back to fake data.
+const OFFLINE_MODE = USE_MOCKS;
+
+/** GET a JSON endpoint; any failure (offline, 401, non-JSON) yields an empty object. */
+async function getJson(url: string): Promise<any> {
+  try {
+    const res = await fetch(url);
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+/** Uploads one file and returns the server-issued storage key to reference when creating a drop. */
+async function uploadMedia(kind: 'image' | 'video', blob: Blob, filename: string): Promise<string> {
+  const form = new FormData();
+  form.append('file', blob, filename);
+  const res = await fetch(`/api/uploads?kind=${kind}`, { method: 'POST', body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+  return data.upload.key as string;
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [meta, b64] = dataUrl.split(',');
+  const mime = /data:(.*?)[;,]/.exec(meta)?.[1] ?? 'image/jpeg';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [drops, setDrops] = useState<MysteryDrop[]>([]);
-  const [selectedDropId, setSelectedDropId] = useState<string>('drop-9042-alpha');
+  const [selectedDropId, setSelectedDropId] = useState<string>('');
   const [leaders, setLeaders] = useState<MovieKingLeader[]>([]);
   const [season, setSeason] = useState<SeasonInfo | null>(null);
   const [scoutActivities, setScoutActivities] = useState<ScoutActivityNotification[]>([]);
@@ -47,7 +77,7 @@ export default function App() {
   const [liveToast, setLiveToast] = useState<{ title: string; message: string } | null>(null);
   const [unreadAlerts, setUnreadAlerts] = useState<number>(0);
 
-  // Poll system infrastructure status (MongoDB Atlas, Redis, Socket.io)
+  // Poll system infrastructure status (database, sockets)
   useEffect(() => {
     if (OFFLINE_MODE) {
       setSystemStatus(dummySystemStatus);
@@ -68,7 +98,34 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Socket.io live connection & events listener
+  const socketRef = useRef<Socket | null>(null);
+
+  // Failures of fire-and-forget actions (vote, agree, scout) have no form to show an error in,
+  // so surface the server's reason as a toast. `rethrow` keeps inline error handling working.
+  const safely =
+    <A extends unknown[]>(fn: (...args: A) => Promise<void>, rethrow = false) =>
+    async (...args: A) => {
+      try {
+        await fn(...args);
+      } catch (err) {
+        setLiveToast({ title: 'Action failed', message: err instanceof Error ? err.message : String(err) });
+        setTimeout(() => setLiveToast(null), 5000);
+        if (rethrow) throw err;
+      }
+    };
+
+  const refreshDrop = async (dropId: string) => {
+    const res = await getJson(`/api/drops/${dropId}`);
+    if (res.drop) setDrops(prev => prev.map(d => (d.id === dropId ? res.drop : d)));
+  };
+
+  const refreshScoutFeed = async () => {
+    const res = await getJson('/api/scouts/feed');
+    if (res.activities) setScoutActivities(res.activities);
+  };
+
+  // Socket.io live connection. It reconnects when the signed-in user changes, so the handshake
+  // carries the right session cookie and the server puts the socket in that user's private room.
   useEffect(() => {
     if (OFFLINE_MODE) {
       // Simulate a live connection badge; real-time events are driven locally instead.
@@ -81,51 +138,54 @@ export default function App() {
       path: '/socket.io',
       reconnectionAttempts: 20,
     });
+    socketRef.current = socket;
 
-    socket.on('connect', () => {
-      setSocketConnected(true);
-      if (currentUser?.id) {
-        socket.emit('join_user', currentUser.id);
-      }
-      if (selectedDropId) {
-        socket.emit('join_drop', selectedDropId);
-      }
-    });
-
-    socket.on('disconnect', () => {
-      setSocketConnected(false);
-    });
-
-    socket.on('telemetry', (data: AnalyticsTelemetry) => {
-      setTelemetry(prev => (prev ? { ...prev, ...data } : data));
-    });
+    socket.on('connect', () => setSocketConnected(true));
+    socket.on('disconnect', () => setSocketConnected(false));
 
     socket.on('new_drop', (drop: MysteryDrop) => {
       setDrops(prev => [drop, ...prev.filter(d => d.id !== drop.id)]);
     });
 
+    // Someone guessed on a drop we are watching.
     socket.on('guess_result', (payload: any) => {
       setDrops(prev =>
-        prev.map(d => {
-          if (d.id === payload.dropId) {
-            return {
-              ...d,
-              status: payload.isCorrect ? 'solved' : d.status,
-              solvedBy: payload.isCorrect ? payload.userHandle : d.solvedBy,
-            };
-          }
-          return d;
-        })
+        prev.map(d =>
+          d.id === payload.dropId
+            ? {
+                ...d,
+                status: payload.status ?? d.status,
+                totalGuessesCast: payload.totalGuessesCast ?? d.totalGuessesCast,
+                candidates: payload.candidates ?? d.candidates,
+                solvedBy: payload.isCorrect ? payload.userHandle : d.solvedBy,
+              }
+            : d
+        )
+      );
+      // The push never carries the answer; fetch the drop again so a solved one reveals its title.
+      if (payload.isCorrect) refreshDrop(payload.dropId);
+    });
+
+    // Crowd state changed (a guess or a vote).
+    socket.on('consensus_update', ({ dropId, status, totalGuessesCast, candidates }: any) => {
+      setDrops(prev => prev.map(d => (d.id === dropId ? { ...d, status, totalGuessesCast, candidates } : d)));
+    });
+
+    socket.on('new_comment', ({ dropId, comment }: any) => {
+      setDrops(prev =>
+        prev.map(d =>
+          d.id === dropId && !d.comments.some(c => c.id === comment.id) ? { ...d, comments: [comment, ...d.comments] } : d
+        )
       );
     });
 
+    // Sent only to people who scout the actor, so no client-side filtering is needed.
     socket.on('scout_activity', (activity: ScoutActivityNotification) => {
-      setScoutActivities(prev => [activity, ...prev]);
-      if (currentUser?.following?.includes(activity.userHandle)) {
-        setLiveToast({ title: activity.title, message: activity.message });
-        setUnreadAlerts(prev => prev + 1);
-        setTimeout(() => setLiveToast(null), 5000);
-      }
+      setScoutActivities(prev => [activity, ...prev.filter(a => a.id !== activity.id)]);
+      setLiveToast({ title: activity.title, message: activity.message });
+      setUnreadAlerts(prev => prev + 1);
+      soundEngine.playAlert();
+      setTimeout(() => setLiveToast(null), 5000);
     });
 
     socket.on('credit_update', ({ credits }: { credits: number }) => {
@@ -139,51 +199,69 @@ export default function App() {
 
     return () => {
       socket.disconnect();
+      socketRef.current = null;
+      setSocketConnected(false);
     };
-  }, [currentUser?.id, selectedDropId]);
+  }, [currentUser?.id]);
 
-  // Load initial data
+  // Watch the selected drop's room (and rejoin after a reconnect).
   useEffect(() => {
-    if (OFFLINE_MODE) {
-      // currentUser stays null until the visitor authenticates via the "/" auth page.
-      setAllUsers(dummyUsers);
-      setDrops(dummyDrops);
-      setSelectedDropId(dummyDrops[0].id);
-      setLeaders(dummyLeaders);
-      setSeason(dummySeason);
-      setScoutActivities(dummyScoutActivities);
-      setTelemetry(dummyTelemetry);
-      return;
-    }
+    const socket = socketRef.current;
+    if (OFFLINE_MODE || !socket || !selectedDropId) return;
+    const join = () => socket.emit('join_drop', selectedDropId);
+    if (socket.connected) join();
+    socket.on('connect', join);
+    return () => {
+      socket.off('connect', join);
+      socket.emit('leave_drop', selectedDropId);
+    };
+  }, [selectedDropId, currentUser?.id]);
+
+  // Mock mode: seed everything once from the bundled demo data.
+  useEffect(() => {
+    if (!OFFLINE_MODE) return;
+    // currentUser stays null until the visitor authenticates via the "/" auth page.
+    setAllUsers(dummyUsers);
+    setDrops(dummyDrops);
+    setSelectedDropId(dummyDrops[0].id);
+    setLeaders(dummyLeaders);
+    setSeason(dummySeason);
+    setScoutActivities(dummyScoutActivities);
+    setTelemetry(dummyTelemetry);
+  }, []);
+
+  // Real mode: load on mount (which also restores a session from the cookie) and reload whenever
+  // the signed-in user changes, so drops carry that user's own trials and the scout feed is theirs.
+  useEffect(() => {
+    if (OFFLINE_MODE) return;
+    let cancelled = false;
 
     async function loadData() {
-      try {
-        const [meRes, dropsRes, leadersRes, usersRes, scoutFeedRes] = await Promise.all([
-          fetch('/api/auth/me').then(r => r.json()),
-          fetch('/api/drops').then(r => r.json()),
-          fetch('/api/leaderboard').then(r => r.json()),
-          fetch('/api/users').then(r => r.json()),
-          fetch('/api/scouts/feed').then(r => r.json()),
-        ]);
+      const [meRes, dropsRes, leadersRes, usersRes, feedRes] = await Promise.all([
+        getJson('/api/auth/me'),
+        getJson('/api/drops?limit=100'),
+        getJson('/api/leaderboard'),
+        getJson('/api/users'),
+        currentUser ? getJson('/api/scouts/feed') : Promise.resolve({}),
+      ]);
+      if (cancelled) return; // a newer load (after login/logout/switch) owns the state now
 
-        if (meRes?.user) setCurrentUser(meRes.user);
-        if (dropsRes?.drops) {
-          setDrops(dropsRes.drops);
-          if (dropsRes.drops.length > 0) {
-            setSelectedDropId(dropsRes.drops[0].id);
-          }
-        }
-        if (leadersRes?.leaderboard) setLeaders(leadersRes.leaderboard);
-        if (leadersRes?.season) setSeason(leadersRes.season);
-        if (usersRes?.users) setAllUsers(usersRes.users);
-        if (scoutFeedRes?.activities) setScoutActivities(scoutFeedRes.activities);
-      } catch (err) {
-        console.error('Failed to load initial data:', err);
+      if (meRes.user) setCurrentUser(meRes.user);
+      if (dropsRes.drops) {
+        setDrops(dropsRes.drops);
+        setSelectedDropId(prev => (dropsRes.drops.some((d: MysteryDrop) => d.id === prev) ? prev : (dropsRes.drops[0]?.id ?? '')));
       }
+      if (leadersRes.leaderboard) setLeaders(leadersRes.leaderboard);
+      if (leadersRes.season) setSeason(leadersRes.season);
+      if (usersRes.users) setAllUsers(usersRes.users);
+      setScoutActivities(feedRes.activities ?? []);
     }
 
     loadData();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id]);
 
   // Simulate one scout-activity alert shortly after login, so the notification
   // toast + sound are reachable without a live backend to push real ones.
@@ -217,7 +295,7 @@ export default function App() {
     return () => clearTimeout(timeout);
   }, [currentUser?.id]);
 
-  // SSE Stream for real-time analytics and scouting alerts
+  // Public telemetry stream. Everything else arrives over Socket.IO.
   useEffect(() => {
     if (OFFLINE_MODE) {
       // Simulate gentle telemetry drift so the HUD still feels "live".
@@ -241,90 +319,14 @@ export default function App() {
     eventSource.addEventListener('initial_telemetry', (e: any) => {
       try {
         setTelemetry(JSON.parse(e.data));
-      } catch (err) {}
+      } catch {}
     });
 
     eventSource.addEventListener('telemetry', (e: any) => {
       try {
         const data = JSON.parse(e.data);
         setTelemetry(prev => (prev ? { ...prev, ...data } : data));
-      } catch (err) {}
-    });
-
-    eventSource.addEventListener('scout_activity', (e: any) => {
-      try {
-        const { activity, authorHandle } = JSON.parse(e.data);
-        setScoutActivities(prev => [activity, ...prev]);
-
-        // If current user is following the author, show live toast!
-        if (currentUser?.following?.includes(authorHandle)) {
-          setLiveToast({ title: activity.title, message: activity.message });
-          setUnreadAlerts(prev => prev + 1);
-          soundEngine.playAlert();
-          setTimeout(() => setLiveToast(null), 5000);
-        }
-      } catch (err) {}
-    });
-
-    eventSource.addEventListener('guess_submitted', (e: any) => {
-      try {
-        const payload = JSON.parse(e.data);
-        setDrops(prev =>
-          prev.map(d => {
-            if (d.id === payload.dropId) {
-              const updatedTrials = { ...d.userTrials };
-              if (payload.trialRecord) {
-                updatedTrials[payload.trialRecord.userId] = payload.trialRecord;
-              }
-              return {
-                ...d,
-                totalGuessesCast: payload.totalGuessesCast,
-                candidates: payload.candidates,
-                comments: [payload.newComment, ...d.comments],
-                status: payload.dropStatus || d.status,
-                solvedBy: payload.solvedBy || d.solvedBy,
-                userTrials: updatedTrials,
-              };
-            }
-            return d;
-          })
-        );
-
-        // Refresh leaderboards
-        fetch('/api/leaderboard')
-          .then(r => r.json())
-          .then(res => {
-            if (res.leaderboard) setLeaders(res.leaderboard);
-          });
-      } catch (err) {}
-    });
-
-    eventSource.addEventListener('new_drop_created', (e: any) => {
-      try {
-        const { drop, user } = JSON.parse(e.data);
-        setDrops(prev => [drop, ...prev.filter(d => d.id !== drop.id)]);
-        if (currentUser && user && currentUser.handle === user.handle) {
-          setCurrentUser(prev => (prev ? { ...prev, credits: user.credits } : prev));
-        }
-      } catch (err) {}
-    });
-
-    eventSource.addEventListener('vote_recorded', (e: any) => {
-      try {
-        const { dropId, candidates, totalGuessesCast } = JSON.parse(e.data);
-        setDrops(prev =>
-          prev.map(d => (d.id === dropId ? { ...d, candidates, totalGuessesCast } : d))
-        );
-      } catch (err) {}
-    });
-
-    eventSource.addEventListener('user_credited', (e: any) => {
-      try {
-        const { userId, credits } = JSON.parse(e.data);
-        if (currentUser && currentUser.id === userId) {
-          setCurrentUser(prev => (prev ? { ...prev, credits } : prev));
-        }
-      } catch (err) {}
+      } catch {}
     });
 
     eventSource.addEventListener('season_reset', (e: any) => {
@@ -332,13 +334,19 @@ export default function App() {
         const { season: newSeason, leaders: newLeaders } = JSON.parse(e.data);
         if (newSeason) setSeason(newSeason);
         if (newLeaders) setLeaders(newLeaders);
-      } catch (err) {}
+      } catch {}
     });
 
     return () => {
       eventSource.close();
     };
-  }, [currentUser]);
+  }, []);
+
+  // Leaderboard pushes come without a viewer, so mark "this is me" here by handle.
+  const leadersForView = useMemo(
+    () => leaders.map(l => ({ ...l, isCurrent: l.handle === currentUser?.handle })),
+    [leaders, currentUser?.handle]
+  );
 
   const selectedDrop = drops.find(d => d.id === selectedDropId) || drops[0];
 
@@ -420,7 +428,9 @@ export default function App() {
     if (data.comment) {
       setDrops(prev =>
         prev.map(d =>
-          d.id === selectedDrop.id ? { ...d, comments: [data.comment, ...d.comments] } : d
+          d.id === selectedDrop.id
+            ? { ...d, comments: [data.comment, ...d.comments.filter(c => c.id !== data.comment.id)] }
+            : d
         )
       );
     }
@@ -471,10 +481,27 @@ export default function App() {
       return;
     }
 
+    // Upload the media first (a clip also needs its poster frame as a separate image),
+    // then create the drop referencing the server-issued keys.
+    const { specimenFile, posterDataUrl, imageUrl: _imageUrl, videoUrl: _videoUrl, ...fields } = dropData;
+    if (!specimenFile) throw new Error('Please select a media specimen first.');
+
+    let imageKey: string;
+    let videoKey: string | undefined;
+    if (fields.mediaType === 'clip') {
+      if (!posterDataUrl) throw new Error('Could not capture a poster frame from this clip. Try another MP4.');
+      // Video first: it is the file the server may refuse (length, format), and nothing else
+      // should be stored if it does.
+      videoKey = await uploadMedia('video', specimenFile, specimenFile.name);
+      imageKey = await uploadMedia('image', dataUrlToBlob(posterDataUrl), 'poster.jpg');
+    } else {
+      imageKey = await uploadMedia('image', specimenFile, specimenFile.name);
+    }
+
     const res = await fetch('/api/drops', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(dropData),
+      body: JSON.stringify({ ...fields, imageKey, videoKey }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -482,7 +509,8 @@ export default function App() {
     }
 
     if (data.drop) {
-      setDrops(prev => [data.drop, ...prev]);
+      // The socket push may have already added it; keep exactly one copy (this one has the answer for the uploader).
+      setDrops(prev => [data.drop, ...prev.filter(d => d.id !== data.drop.id)]);
       setSelectedDropId(data.drop.id);
     }
     if (data.user && currentUser) {
@@ -550,6 +578,7 @@ export default function App() {
     if (data.user) {
       setCurrentUser(data.user);
     }
+    refreshScoutFeed();
   };
 
   const handleUnfollowUser = async (handle: string) => {
@@ -572,6 +601,7 @@ export default function App() {
     if (data.user) {
       setCurrentUser(data.user);
     }
+    refreshScoutFeed();
   };
 
   const handleAdminResetSeason = async () => {
@@ -611,6 +641,7 @@ export default function App() {
       body: JSON.stringify({ userId }),
     });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not switch user');
     if (data.user) setCurrentUser(data.user);
   };
 
@@ -656,7 +687,13 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (!OFFLINE_MODE) {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch {}
+      setUnreadAlerts(0);
+    }
     setCurrentUser(null);
   };
 
@@ -682,7 +719,7 @@ export default function App() {
               drops={drops}
               selectedDropId={selectedDropId}
               setSelectedDropId={setSelectedDropId}
-              leaders={leaders}
+              leaders={leadersForView}
               season={season}
               scoutActivities={scoutActivities}
               telemetry={telemetry}
@@ -694,14 +731,14 @@ export default function App() {
               onUserSwitch={handleUserSwitch}
               onLogout={handleLogout}
               onGuessSubmit={handleGuessSubmit}
-              onVoteCandidate={handleVoteCandidate}
+              onVoteCandidate={safely(handleVoteCandidate)}
               onPostComment={handlePostComment}
-              onAgreeComment={handleAgreeComment}
+              onAgreeComment={safely(handleAgreeComment)}
               onDropCreated={handleDropCreated}
               onClaimDailyRefill={handleClaimDailyRefill}
               onPurchaseCredits={handlePurchaseCredits}
-              onFollowUser={handleFollowUser}
-              onUnfollowUser={handleUnfollowUser}
+              onFollowUser={safely(handleFollowUser, true)}
+              onUnfollowUser={safely(handleUnfollowUser, true)}
               onAdminResetSeason={handleAdminResetSeason}
             />
           ) : (

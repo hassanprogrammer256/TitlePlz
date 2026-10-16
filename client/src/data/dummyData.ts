@@ -463,10 +463,9 @@ export const dummySystemStatus: SystemStatus = {
     activeSockets: 42,
     protocol: 'websocket',
   },
-  mongodb: {
-    status: 'embedded_synced',
-    host: 'titleplz.6r6b8wq.mongodb.net',
-    database: 'movie_recon',
+  database: {
+    provider: 'sqlite',
+    status: 'connected',
     modelsLoaded: 6,
   },
   uptimeSeconds: 5400,

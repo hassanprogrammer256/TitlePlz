@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 
+const API_TARGET = process.env.VITE_API_TARGET ?? 'http://localhost:4000';
+
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
@@ -12,6 +14,13 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // shared/ lives outside the client root
+      fs: {allow: ['..']},
+      proxy: {
+        '/api': {target: API_TARGET, changeOrigin: true},
+        '/media': {target: API_TARGET, changeOrigin: true},
+        '/socket.io': {target: API_TARGET, ws: true, changeOrigin: true},
+      },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
